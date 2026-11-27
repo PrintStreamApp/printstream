@@ -1,6 +1,15 @@
 {
   "releases": [
     {
+      "version": "1.3.25",
+      "releasedOn": "2026-11-27",
+      "changes": [
+        "Windows bridge: a healthy update is no longer rolled back after you clear a stuck installation lock with \"update clear-lock\" and restart, and the command no longer removes a lock an uninstall is still using.",
+        "Windows server app: the stuck-lock recovery from 1.3.24 reaches the server app in this update, including these fixes.",
+        "Correction to 1.3.24: only the PrintStream server app could fail to upgrade after a rollback. Docker installs were not affected. The Docker repair added in 1.3.24 now runs only when it can save its backup to a backups volume."
+      ]
+    },
+    {
       "version": "1.3.24",
       "releasedOn": "2026-11-26",
       "changes": [

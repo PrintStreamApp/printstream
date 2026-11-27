@@ -23,6 +23,9 @@ import {
   isPreSquashMigrationName,
   isRecoverableFreshInstallBaselineGap,
   isAlreadyExistsError,
+  isMountPoint,
+  lastCreatedObject,
+  replayableMigrationSql,
   isRollbackDamagedHistory,
   listCheckedInMigrationNames
 } from './lib/bootstrap-prisma-migrations.mjs'
@@ -186,7 +189,8 @@ function libpqDatabaseUrl() {
  * raised nothing.
  */
 async function firstMigrationError(migrationName) {
-  const sql = readFileSync(path.join(migrationsDir, migrationName, 'migration.sql'), 'utf8')
+  const sql = replayableMigrationSql(readFileSync(path.join(migrationsDir, migrationName, 'migration.sql'), 'utf8'))
+  if (sql === null) return { code: 'not-replayable', message: 'the migration controls its own transaction' }
   const client = new pg.Client({ connectionString: libpqDatabaseUrl() })
   await client.connect()
   try {
@@ -205,6 +209,30 @@ async function firstMigrationError(migrationName) {
 }
 
 /**
+ * Whether the last object a migration creates already exists, proving the whole migration ran
+ * before (see `lastCreatedObject`). False when the migration creates nothing recognizable.
+ */
+async function migrationObjectsPresent(migrationName) {
+  const object = lastCreatedObject(readFileSync(path.join(migrationsDir, migrationName, 'migration.sql'), 'utf8'))
+  if (!object) return false
+  const client = new pg.Client({ connectionString: libpqDatabaseUrl() })
+  await client.connect()
+  try {
+    const queries = {
+      table: ["SELECT to_regclass(format('public.%I', $1::text)) IS NOT NULL AS present", [object.name]],
+      index: ["SELECT to_regclass(format('public.%I', $1::text)) IS NOT NULL AS present", [object.name]],
+      type: ['SELECT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = \'public\' AND t.typname = $1) AS present', [object.name]],
+      constraint: ['SELECT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = \'public\' AND c.conname = $1) AS present', [object.name]],
+      column: ['SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = $1 AND column_name = $2) AS present', [object.table, object.name]]
+    }
+    const [text, values] = queries[object.kind]
+    return (await client.query(text, values)).rows[0]?.present === true
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+/**
  * Dumps the database to the backups folder before the history repair changes anything. Returns
  * the dump's path, or null when no dump could be made (no folder, no pg_dump, or it failed), in
  * which case the repair does not run.
@@ -213,6 +241,12 @@ function backUpBeforeHistoryRepair() {
   const directory = process.env.BACKUPS_DIR ?? '/backups'
   if (!existsSync(directory)) {
     process.stdout.write(`[history-repair] No backups folder at ${directory}; not repairing without a backup.\n`)
+    return null
+  }
+  // In a container, a folder that is not a mounted volume vanishes with the container, and the
+  // image creates /backups whether or not a volume is attached.
+  if (existsSync('/.dockerenv') && !isMountPoint(readFileSync('/proc/self/mountinfo', 'utf8'), directory)) {
+    process.stdout.write(`[history-repair] The backups folder ${directory} is not a mounted volume, so a backup there would not survive the container; not repairing without a backup.\n`)
     return null
   }
   const file = path.join(directory, `pre-history-repair-${new Date().toISOString().replace(/[:.]/g, '-')}.dump`)
@@ -242,8 +276,11 @@ async function repairRollbackDamagedHistory() {
   const onDisk = listCheckedInMigrationNames(migrationsDir)
   let history = await readMigrationHistory()
   // The damaged shape, and a failure that is "already exists" when the migration is replayed.
+  // The damaged shape, a failure that is "already exists" when the migration is replayed, and the
+  // last object the migration creates already present (so all of it ran before the rollback).
   const isDamaged = async () => isRollbackDamagedHistory({ ...history, onDisk })
     && isAlreadyExistsError(await firstMigrationError(history.failed[0].migration_name))
+    && await migrationObjectsPresent(history.failed[0].migration_name)
   if (!await isDamaged()) return null
 
   process.stdout.write('[history-repair] The migration history is behind the schema: migrations are failing because what they create already exists, the trace of a rollback to an older build that deleted history rows.\n')

@@ -10,6 +10,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
 import path from 'node:path'
 import { WINDOWS_INSTALL_OPERATION_SCRIPT } from './windows-install-operation-script.js'
 import { windowsPowerShellPath } from './windows-hidden-launch.js'
@@ -30,6 +31,26 @@ const operations = new AsyncLocalStorage<WindowsInstallOperation>()
 
 type AdmissionAction = 'acquire' | 'release' | 'clear'
 
+/**
+ * Windows rejects a command line over 32,767 characters, and the admission script, encoded for
+ * -EncodedCommand (UTF-16, base64), is already close to it: 1.3.25's first build passed it and
+ * every lock call failed to start. So the command line carries a short loader instead, holding
+ * the script gzip-compressed; the loader expands it and runs it in the same PowerShell process,
+ * with stdin, exit codes and errors unchanged. No file is written, so nothing can be swapped
+ * between writing and running it.
+ */
+export function boundedPowerShellCommand(script: string): string {
+  const packed = gzipSync(Buffer.from(script, 'utf8')).toString('base64')
+  const loader = `$z = [Convert]::FromBase64String('${packed}')
+$stream = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,$z)), [IO.Compression.CompressionMode]::Decompress)
+$text = (New-Object IO.StreamReader($stream, (New-Object Text.UTF8Encoding($false)))).ReadToEnd()
+. ([ScriptBlock]::Create($text))`
+  return Buffer.from(loader, 'utf16le').toString('base64')
+}
+
+/** The admission command, built once: the script is fixed text. */
+const ADMISSION_COMMAND = boundedPowerShellCommand(WINDOWS_INSTALL_OPERATION_SCRIPT)
+
 /** How long one native admission call may take unless the caller allows longer. */
 const DEFAULT_ADMISSION_TIMEOUT_MS = 15_000
 
@@ -48,8 +69,7 @@ export class WindowsInstallOperationRefusedError extends Error {
 /** Invoke the fixed native admission protocol; refusal never guesses at recovery. */
 function invoke(action: AdmissionAction, operation: Pick<WindowsInstallOperation, 'installDir' | 'serviceId' | 'dataDir' | 'token'>, timeoutMs = DEFAULT_ADMISSION_TIMEOUT_MS): { directory: string; installDir: string; claim: string; cutoff?: string } & Record<string, unknown> {
   const result = spawnSync(windowsPowerShellPath(), [
-    '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand',
-    Buffer.from(WINDOWS_INSTALL_OPERATION_SCRIPT, 'utf16le').toString('base64')
+    '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', ADMISSION_COMMAND
   ], { input: JSON.stringify({ installDir: operation.installDir, serviceId: operation.serviceId, dataDir: operation.dataDir, token: operation.token, action, pid: process.pid }), encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 })
   if (result.error || result.status !== 0 || result.signal !== null) {
     throw new WindowsInstallOperationRefusedError(action)
@@ -76,8 +96,12 @@ export function transferWindowsInstallOperation(): WindowsInstallOperation {
  * The executable basename is the installed service id shared by both SEA apps.
  */
 export interface WindowsInstallOperationOptions {
-  /** How long taking the lock may take; the boot path allows longer for a slow cold start. */
-  acquireTimeoutMs?: number
+  /**
+   * How long each lock call (taking it, and releasing it) may take to run PowerShell; the boot
+   * path allows longer for a slow cold start. A lock another operation holds is still waited for
+   * only briefly (inside the script), never this long.
+   */
+  timeoutMs?: number
 }
 
 export function withWindowsInstallOperation<T>(exePath: string, callback: () => T, dataDir?: string, options: WindowsInstallOperationOptions = {}): T {
@@ -102,11 +126,11 @@ export function withWindowsInstallOperation<T>(exePath: string, callback: () => 
     return result
   }
   const request = { installDir, serviceId, dataDir, token: randomUUID() }
-  const observed = invoke('acquire', request, options.acquireTimeoutMs)
+  const observed = invoke('acquire', request, options.timeoutMs)
   const operation: WindowsInstallOperation = { ...request, ...observed, active: true, transferred: false, pending: new Set() }
   const releaseClaim = (): void => {
     operation.active = false
-    if (!operation.transferred) invoke('release', operation)
+    if (!operation.transferred) invoke('release', operation, options.timeoutMs)
   }
   const release = (): void | Promise<void> => {
     if (operation.pending.size === 0) return releaseClaim()

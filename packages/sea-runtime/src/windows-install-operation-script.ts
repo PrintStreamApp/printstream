@@ -126,6 +126,14 @@ function GetInstallControl([string] $installDir, [string] $serviceId, [string] $
   AssertInstallControlAcl $directory $serviceSid
   return @{ directory=$directory; installDir=$canonical; claim=[IO.Path]::Combine($directory, 'active.json') }
 }
+# The start time of a running process as a UTC file time, or $null when it is gone or unreadable.
+# Recorded with the owner's id, so clear-lock can tell the owner from a later process given the
+# same id (Windows reuses process ids).
+function ProcessStartedAt([int] $processId) {
+  $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+  if (-not $process) { return $null }
+  try { return $process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() } catch { return $null }
+}
 function AssertInstallClaim($control, [string] $token) {
   AssertPlainInstallPath $control.claim
   $record = [IO.File]::ReadAllText($control.claim) | ConvertFrom-Json
@@ -151,6 +159,7 @@ if ($record.action -eq 'acquire') {
     }
   }
   $record | Add-Member -NotePropertyName cutoff -NotePropertyValue ([DateTime]::UtcNow.ToFileTimeUtc().ToString())
+  $record | Add-Member -NotePropertyName ownerStartedAt -NotePropertyValue (ProcessStartedAt ([int]$record.pid))
   try {
     $bytes = [Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
     $stream.Write($bytes, 0, $bytes.Length)
@@ -176,7 +185,16 @@ if ($record.action -eq 'acquire') {
   if ($owner) {
     $started = $null
     try { $started = $owner.StartTime.ToUniversalTime() } catch { $started = $null }
-    if ($null -eq $started -or $null -eq $claimedAt -or $started -le $claimedAt) {
+    # The owner is the process with the recorded id AND start time (claims from 1.3.24 and later,
+    # and re-stamped by a cleanup that takes the claim over). Older claims have only the time the
+    # claim was taken: a process that started before it may be the owner.
+    $sameOwner = $true
+    if ($null -ne $started -and $claimRecord.ownerStartedAt) {
+      $sameOwner = [Math]::Abs($started.ToFileTimeUtc() - [long]$claimRecord.ownerStartedAt) -lt 10000000
+    } elseif ($null -ne $started -and $null -ne $claimedAt) {
+      $sameOwner = $started -le $claimedAt
+    }
+    if ($sameOwner) {
       @{ directory=$control.directory; installDir=$control.installDir; claim=$control.claim; outcome='still-running'; ownerPid=$ownerPid } | ConvertTo-Json -Compress
       exit 0
     }

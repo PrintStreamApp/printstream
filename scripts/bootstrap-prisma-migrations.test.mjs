@@ -7,6 +7,9 @@ import {
   getPrismaOutput,
   hasFailedMigrationState,
   isAlreadyExistsError,
+  isMountPoint,
+  lastCreatedObject,
+  replayableMigrationSql,
   isRollbackDamagedHistory,
   isNonEmptyDatabaseBaselineCase,
   isPreSquashMigrationName,
@@ -142,4 +145,37 @@ test('the damaged shape never matches a normal history or a newly added migratio
     failed: [{ migration_name: '20260910160000_prepared_slicing_source' }],
     onDisk
   }), false)
+})
+
+test('a migration with its own BEGIN and COMMIT lines is replayed without them; other control is refused', () => {
+  const own = 'BEGIN;\nCREATE TYPE "Kind" AS ENUM (\'a\');\nCOMMIT;\n'
+  assert.equal(replayableMigrationSql(own).includes('BEGIN;'), false)
+  assert.equal(replayableMigrationSql(own).includes('COMMIT;'), false)
+  assert.equal(replayableMigrationSql('CREATE TABLE "A" ();\nROLLBACK;\n'), null)
+  // PL/pgSQL blocks keep their BEGIN and END.
+  const block = 'DO $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;\n'
+  assert.equal(replayableMigrationSql(block), block)
+})
+
+test('the last object a migration creates is what proves all of it ran', () => {
+  const sql = [
+    '-- CREATE TABLE "Commented" (id int);',
+    'CREATE TABLE "PrinterFault" ("id" TEXT);',
+    'CREATE UNIQUE INDEX "PrinterFault_workspaceId_id_key" ON "PrinterFault"("id");',
+    'ALTER TABLE "PrinterFault" ADD CONSTRAINT "PrinterFault_source_check" CHECK (true);',
+    'UPDATE "PrinterFault" SET "id" = "id";'
+  ].join('\n')
+  assert.deepEqual(lastCreatedObject(sql), { kind: 'constraint', name: 'PrinterFault_source_check' })
+  assert.deepEqual(lastCreatedObject('ALTER TABLE "AuthUser" ADD COLUMN IF NOT EXISTS "locale" TEXT;'), { kind: 'column', table: 'AuthUser', name: 'locale' })
+  assert.equal(lastCreatedObject('UPDATE "A" SET "b" = 1;'), null)
+})
+
+test('a backups folder counts as kept only when it is a mount point', () => {
+  const mountinfo = [
+    '612 580 0:52 / / rw,relatime - overlay overlay rw',
+    '640 612 259:2 /srv/backups /backups rw,relatime - ext4 /dev/nvme0n1p2 rw'
+  ].join('\n')
+  assert.equal(isMountPoint(mountinfo, '/backups'), true)
+  assert.equal(isMountPoint(mountinfo, '/backups/'), true)
+  assert.equal(isMountPoint(mountinfo, '/data'), false)
 })

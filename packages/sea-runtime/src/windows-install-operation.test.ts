@@ -245,3 +245,16 @@ test('clear-lock gives the manual route when PowerShell cannot run the check', a
     syncBuiltinESMExports()
   }
 })
+
+test('the admission command stays far below the Windows command-line limit and carries the script exactly', async () => {
+  const { gunzipSync } = await import('node:zlib')
+  const { WINDOWS_INSTALL_OPERATION_SCRIPT } = await import('./windows-install-operation-script.js')
+  const { boundedPowerShellCommand } = await import('./windows-install-operation.js')
+  const encoded = boundedPowerShellCommand(WINDOWS_INSTALL_OPERATION_SCRIPT)
+  // 32,767 is the whole command line, including powershell.exe's path and the other flags.
+  assert.ok(encoded.length < 20000, `encoded admission command is ${encoded.length} characters`)
+  const loader = Buffer.from(encoded, 'base64').toString('utf16le')
+  const packed = /FromBase64String\('([^']+)'\)/.exec(loader)?.[1]
+  assert.ok(packed)
+  assert.equal(gunzipSync(Buffer.from(packed, 'base64')).toString('utf8'), WINDOWS_INSTALL_OPERATION_SCRIPT)
+})

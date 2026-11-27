@@ -84,6 +84,13 @@ $receiver = New-Object IO.FileStream($receipt, [IO.FileMode]::CreateNew, [IO.Fil
 $receiver.Dispose()
 AssertInstallClaim $control $record.token
 $claim = [IO.File]::ReadAllText($control.claim) | ConvertFrom-Json
+# The process that took the claim exits once this receiver acknowledges it, so stamp this
+# receiver as the owner: clear-lock must see a running owner while the cleanup works. The token
+# and cutoff stay as they were (the cutoff still bounds which processes are terminated below).
+$owned = [IO.File]::ReadAllText($control.claim) | ConvertFrom-Json
+$owned.pid = $PID
+$owned | Add-Member -Force -NotePropertyName ownerStartedAt -NotePropertyValue (ProcessStartedAt $PID)
+[IO.File]::WriteAllText($control.claim, ($owned | ConvertTo-Json -Compress))
 Start-Sleep -Seconds 4
 $err = $null
 try {

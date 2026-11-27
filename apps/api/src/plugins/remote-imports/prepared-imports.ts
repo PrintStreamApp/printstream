@@ -71,20 +71,27 @@ export class PreparedImports<T> {
   async prepare(owner: string, workspaceId: string, download: (signal: AbortSignal) => Promise<PreparedDownload>, options: { identifiable?: boolean } = {}) {
     if (this.closed) throw conflict('Model importing is shutting down. Try again shortly.')
     await this.sweep()
-    if (options.identifiable ?? true) await this.makeRoomFor(owner)
-    const waiting = [...this.entries.values()].filter((entry) => !entry.completed)
-    const inFlight = [...this.preparing]
-    const inWorkspace = waiting.filter((entry) => entry.workspaceId === workspaceId).length
-      + inFlight.filter((reservation) => reservation.workspaceId === workspaceId).length
-    if (inWorkspace >= PREPARED_IMPORT_LIMITS.perWorkspace || waiting.length + inFlight.length >= PREPARED_IMPORT_LIMITS.total) {
-      throw conflict('Too many model imports are awaiting a destination. Try again shortly.')
+    // Reserve before any further await, so parallel requests each see the others and none slips
+    // past a limit while another is still making room. Every count below includes this one.
+    const reservation: Reservation = { owner, workspaceId }
+    this.preparing.add(reservation)
+    try {
+      if (options.identifiable ?? true) await this.makeRoomFor(owner)
+      const waiting = [...this.entries.values()].filter((entry) => !entry.completed)
+      const inFlight = [...this.preparing]
+      const inWorkspace = waiting.filter((entry) => entry.workspaceId === workspaceId).length
+        + inFlight.filter((other) => other.workspaceId === workspaceId).length
+      if (inWorkspace > PREPARED_IMPORT_LIMITS.perWorkspace || waiting.length + inFlight.length > PREPARED_IMPORT_LIMITS.total) {
+        throw conflict('Too many model imports are awaiting a destination. Try again shortly.')
+      }
+    } catch (error) {
+      this.preparing.delete(reservation)
+      throw error
     }
     // Completed replies retain no bytes. Keep a separate bounded replay cache,
     // so normal successful use never consumes pending-download capacity.
     const receipts = [...this.entries].filter(([, entry]) => entry.completed)
     for (const [id] of receipts.slice(0, Math.max(0, receipts.length - 127))) this.entries.delete(id)
-    const reservation: Reservation = { owner, workspaceId }
-    this.preparing.add(reservation)
     const cancellation = new AbortController()
     this.downloads.add(cancellation)
     const timeout = setTimeout(() => cancellation.abort(new Error('Model download timed out. Import it again.')), LIFETIME_MS)
@@ -138,9 +145,10 @@ export class PreparedImports<T> {
     const mine = () => [...this.entries]
       .filter(([, entry]) => entry.owner === owner && !entry.completed)
       .sort(([, left], [, right]) => left.createdAt - right.createdAt)
-    const inFlight = [...this.preparing].filter((reservation) => reservation.owner === owner).length
+    // Includes the caller's own reservation, made before this runs.
+    const inFlight = () => [...this.preparing].filter((reservation) => reservation.owner === owner).length
     for (const [id, entry] of mine()) {
-      if (mine().length + inFlight < PREPARED_IMPORT_LIMITS.perOwner) return
+      if (mine().length + inFlight() <= PREPARED_IMPORT_LIMITS.perOwner) return
       if (entry.confirmation) continue
       await this.mutex.run(id, async () => {
         const current = this.entries.get(id)
@@ -149,7 +157,7 @@ export class PreparedImports<T> {
         await this.removeBytes(current.download.cleanupPath)
       })
     }
-    if (mine().length + inFlight >= PREPARED_IMPORT_LIMITS.perOwner) {
+    if (mine().length + inFlight() > PREPARED_IMPORT_LIMITS.perOwner) {
       throw conflict('Your earlier model imports are still downloading or saving. Try again shortly.')
     }
   }

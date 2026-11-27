@@ -113,3 +113,54 @@ export function isRollbackDamagedHistory({ applied, failed, onDisk }) {
     && onDisk[applied.length] === failure.migration_name
     && failure.migration_name <= LAST_MIGRATION_BEFORE_HISTORY_REPAIR
 }
+
+/**
+ * A migration's SQL made safe to replay inside a transaction the caller always rolls back, or null
+ * when it cannot be. A migration that wraps itself in `BEGIN;` ... `COMMIT;` lines would commit
+ * the caller's transaction, so those whole lines are removed; any other top-level transaction
+ * control (`ROLLBACK;`, `START TRANSACTION;`, a `COMMIT;` sharing a line) makes it not replayable.
+ * (`END;` is left alone: PL/pgSQL blocks end with it.)
+ * `BEGIN` inside a `DO` block has no semicolon and is untouched.
+ */
+export function replayableMigrationSql(sql) {
+  const stripped = sql.replace(/^[ \t]*(?:BEGIN|COMMIT)[ \t]*;[ \t]*$/gim, '')
+  return /^[ \t]*(?:BEGIN|COMMIT|ROLLBACK|START[ \t]+TRANSACTION)[ \t]*;/im.test(stripped) ? null : stripped
+}
+
+/**
+ * The last schema object a migration creates, so the bootstrap can check that ALL of it ran
+ * before (a migration runs in one transaction, so its last object existing means every statement
+ * before it committed too). Null when the migration creates nothing this recognizes, in which
+ * case the repair refuses rather than guess.
+ *
+ * @returns {{ kind: 'table' | 'index' | 'type' | 'constraint', name: string } | { kind: 'column', table: string, name: string } | null}
+ */
+export function lastCreatedObject(sql) {
+  const code = sql.replace(/--[^\n]*/g, '')
+  const patterns = [
+    { kind: 'table', pattern: /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"public"\.)?"([^"]+)"/gi },
+    { kind: 'index', pattern: /CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"([^"]+)"/gi },
+    { kind: 'type', pattern: /CREATE\s+TYPE\s+(?:"public"\.)?"([^"]+)"/gi },
+    { kind: 'constraint', pattern: /ADD\s+CONSTRAINT\s+"([^"]+)"/gi },
+    { kind: 'column', pattern: /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"public"\.)?"([^"]+)"\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?"([^"]+)"/gi }
+  ]
+  let last = null
+  for (const { kind, pattern } of patterns) {
+    for (const match of code.matchAll(pattern)) {
+      if (last && match.index < last.index) continue
+      last = kind === 'column'
+        ? { index: match.index, object: { kind, table: match[1], name: match[2] } }
+        : { index: match.index, object: { kind, name: match[1] } }
+    }
+  }
+  return last?.object ?? null
+}
+
+/**
+ * Whether a folder is the mount point of something in `/proc/self/mountinfo` text (a Docker
+ * volume or bind mount), so a backup written there outlives the container.
+ */
+export function isMountPoint(mountinfo, directory) {
+  const normalized = directory.replace(/\/+$/, '') || '/'
+  return mountinfo.split('\n').some((line) => line.split(' ')[4] === normalized)
+}

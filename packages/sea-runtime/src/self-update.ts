@@ -39,6 +39,13 @@ export interface SelfUpdateStateFile {
   updatedAt: string
   bootAttempts: number
   backupPath: string
+  /**
+   * When this build was confirmed healthy without the Windows installation
+   * lock (ISO time). A confirmed build is never rolled back: the next start
+   * that gets the lock finalizes the update instead, and starts are no longer
+   * counted. Absent until then.
+   */
+  confirmedHealthyAt?: string
 }
 
 export function sha256Hex(bytes: Buffer): string {
@@ -196,9 +203,14 @@ export async function noteBootAttemptAndMaybeRollback(input: {
   try {
     return await countBootAndMaybeRollBackUnderLock(input)
   } catch (error) {
-    // Only a lock that could not be TAKEN: a failed release comes after this boot was counted.
-    if (!(error instanceof WindowsInstallOperationRefusedError) || error.action !== 'acquire') throw error
-    return await countBootWithoutLock(input)
+    if (!(error instanceof WindowsInstallOperationRefusedError)) throw error
+    if (error.action === 'acquire') return await countBootWithoutLock(input)
+    // The work under the lock finished, but releasing the lock failed. The claim
+    // may stay behind (clear-lock removes it); this boot must not crash after
+    // being counted, so report what the files say happened.
+    console.warn(`The Windows installation lock could not be released after this start was counted. If later updates report the lock as held, run '"${input.exePath}" update clear-lock' from an administrator prompt.`)
+    if (await readSelfUpdateState(input.updateStateFile)) return 'counted'
+    return await pathExists(`${input.exePath}.failed`) ? 'rolled-back' : 'no-pending-update'
   }
 }
 
@@ -206,6 +218,8 @@ export async function noteBootAttemptAndMaybeRollback(input: {
 async function countBootWithoutLock(input: { updateStateFile: string; exePath: string; maxAttempts?: number }): Promise<BootAttemptOutcome> {
   const state = await readSelfUpdateState(input.updateStateFile)
   if (!state) return 'no-pending-update'
+  // Already confirmed healthy: nothing to count; finalizing waits for the lock.
+  if (state.confirmedHealthyAt) return 'counted'
   const attempts = state.bootAttempts + 1
   const maxAttempts = input.maxAttempts ?? MAX_BOOT_ATTEMPTS
   await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
@@ -234,6 +248,13 @@ async function countBootAndMaybeRollBackUnderLock(input: {
     if (!state) return 'no-pending-update'
 
     assertOwnedBackupPath(input.exePath, state.backupPath)
+    // Confirmed healthy while the lock was held elsewhere: finish the update now
+    // that the lock is ours, and never roll this build back.
+    if (state.confirmedHealthyAt) {
+      await finalizeSelfUpdateFiles(input.exePath, state, input.updateStateFile)
+      console.log(`Finalized the self-update to ${state.toFingerprint.slice(0, 12)}, confirmed healthy at ${state.confirmedHealthyAt}.`)
+      return 'no-pending-update'
+    }
     const attempts = state.bootAttempts + 1
     const maxAttempts = input.maxAttempts ?? MAX_BOOT_ATTEMPTS
     if (attempts > maxAttempts && await pathExists(state.backupPath)) {
@@ -254,7 +275,7 @@ async function countBootAndMaybeRollBackUnderLock(input: {
 
     await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
     return 'counted'
-  }, path.dirname(input.updateStateFile), { acquireTimeoutMs: BOOT_LOCK_TIMEOUT_MS })
+  }, path.dirname(input.updateStateFile), { timeoutMs: BOOT_LOCK_TIMEOUT_MS })
 }
 
 /**
@@ -306,9 +327,21 @@ export async function confirmSelfUpdateHealthy(input: {
   try {
     return await finalizeSelfUpdateUnderLock(input)
   } catch (error) {
-    if (!(error instanceof WindowsInstallOperationRefusedError) || error.action !== 'acquire') throw error
+    if (!(error instanceof WindowsInstallOperationRefusedError)) throw error
+    if (error.action !== 'acquire') {
+      // Finalized under the lock, but releasing it failed: the update is done.
+      console.warn(`The Windows installation lock could not be released after finalizing this update. If later updates report the lock as held, run '"${input.exePath}" update clear-lock' from an administrator prompt.`)
+      return !await readSelfUpdateState(input.updateStateFile)
+    }
+    // Record the confirmation in the update state (DATA, never installed files),
+    // as the lockless boot count does, so no later start can roll this build back.
+    const state = await readSelfUpdateState(input.updateStateFile)
+    if (state && !state.confirmedHealthyAt) {
+      await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: 0, confirmedHealthyAt: new Date().toISOString() })
+    }
     console.warn(
-      'This build is running, but its update cannot be finalized: the Windows installation lock is held by another operation or an earlier crash.'
+      'This build is running and is confirmed healthy, but its update cannot be finalized yet: the Windows installation lock is held by another operation or an earlier crash.'
+      + ' It will be finalized at the first start that gets the lock, and will not be rolled back.'
       + ` If no PrintStream update or installer is running, run '"${input.exePath}" update clear-lock' from an administrator prompt.`
     )
     return false
@@ -321,12 +354,17 @@ async function finalizeSelfUpdateUnderLock(input: { updateStateFile: string; exe
     const state = await readSelfUpdateState(input.updateStateFile)
     if (!state) return false
     assertOwnedBackupPath(input.exePath, state.backupPath)
-    await rm(state.backupPath, { force: true }).catch(() => undefined)
-    await rm(`${input.exePath}.failed`, { force: true }).catch(() => undefined)
-    await rm(`${input.exePath}.new`, { force: true }).catch(() => undefined)
-    await rm(input.updateStateFile, { force: true })
+    await finalizeSelfUpdateFiles(input.exePath, state, input.updateStateFile)
     return true
   }, path.dirname(input.updateStateFile))
+}
+
+/** Drops the rollback backup, leftovers and the update state. Caller holds the lock. */
+async function finalizeSelfUpdateFiles(exePath: string, state: SelfUpdateStateFile, updateStateFile: string): Promise<void> {
+  await rm(state.backupPath, { force: true }).catch(() => undefined)
+  await rm(`${exePath}.failed`, { force: true }).catch(() => undefined)
+  await rm(`${exePath}.new`, { force: true }).catch(() => undefined)
+  await rm(updateStateFile, { force: true })
 }
 
 export async function readHeldBackFingerprint(heldBackFile: string): Promise<string | null> {
@@ -369,7 +407,8 @@ export async function readSelfUpdateState(filePath: string): Promise<SelfUpdateS
       toFingerprint: parsed.toFingerprint,
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString(),
       bootAttempts: parsed.bootAttempts,
-      backupPath: parsed.backupPath
+      backupPath: parsed.backupPath,
+      ...(typeof parsed.confirmedHealthyAt === 'string' ? { confirmedHealthyAt: parsed.confirmedHealthyAt } : {})
     }
   } catch {
     return null

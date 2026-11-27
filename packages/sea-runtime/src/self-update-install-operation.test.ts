@@ -110,7 +110,78 @@ test('a healthy build whose update cannot be finalized keeps running and says wh
     const input = { exePath: path.join(directory, 'owned.exe'), updateStateFile: path.join(directory, 'self-update.json') }
     await writeSelfUpdateState(input.updateStateFile, { fromFingerprint: 'old', toFingerprint: 'new', updatedAt: new Date().toISOString(), bootAttempts: 1, backupPath: `${input.exePath}.old` })
     assert.equal(await confirmSelfUpdateHealthy(input), false)
-    assert.equal(JSON.parse(await readFile(input.updateStateFile, 'utf8')).bootAttempts, 1, 'left pending for the next start')
+    const state = JSON.parse(await readFile(input.updateStateFile, 'utf8'))
+    assert.equal(state.bootAttempts, 0, 'the start count is reset')
+    assert.ok(state.confirmedHealthyAt, 'and the confirmation is recorded for the next start that gets the lock')
   })
   assert.match(warnings.join('\n'), /update clear-lock/)
+})
+
+
+/**
+ * Runs `body` as Windows with a native admission that refuses while `held()` is true and grants
+ * (acquire and release succeed) otherwise, so one test can hold the lock and then clear it.
+ */
+async function withSwitchableLock(held: () => boolean, body: (directory: string) => Promise<void>): Promise<void> {
+  const directory = await mkdtemp(path.join(tmpdir(), 'sea-boot-switchable-'))
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const native = mock.method(childProcess, 'spawnSync', (_command: string, _args: string[], options: { input: string }) => {
+    if (held()) return { status: 1, signal: null, stdout: '', stderr: 'claim held' }
+    const input = JSON.parse(options.input)
+    const control = 'C:\\.sea-install-operation-test'
+    return { status: 0, signal: null, stdout: JSON.stringify({ directory: control, claim: `${control}\\active.json`, installDir: input.installDir }) }
+  })
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+  syncBuiltinESMExports()
+  try { await body(directory) } finally {
+    Object.defineProperty(process, 'platform', platform)
+    native.mock.restore()
+    syncBuiltinESMExports()
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+test('a healthy build is never rolled back after a stale lock, restarts and clear-lock', async (context) => {
+  context.mock.method(console, 'warn', () => undefined)
+  context.mock.method(console, 'error', () => undefined)
+  context.mock.method(console, 'log', () => undefined)
+  let lockHeld = true
+  await withSwitchableLock(() => lockHeld, async (directory) => {
+    const exePath = path.join(directory, 'owned.exe')
+    const input = { exePath, updateStateFile: path.join(directory, 'self-update.json'), heldBackFile: path.join(directory, 'held-back.json') }
+    await writeFile(exePath, 'new build')
+    await writeFile(`${exePath}.old`, 'old build')
+    await writeSelfUpdateState(input.updateStateFile, { fromFingerprint: 'old', toFingerprint: 'new', updatedAt: new Date().toISOString(), bootAttempts: 0, backupPath: `${exePath}.old` })
+
+    // A stale lock and several restarts of a build that serves each time.
+    for (let restart = 0; restart < 5; restart += 1) {
+      await noteBootAttemptAndMaybeRollback(input)
+      assert.equal(await confirmSelfUpdateHealthy(input), false)
+    }
+
+    // The administrator clears the lock and restarts, as the log says.
+    lockHeld = false
+    assert.equal(await noteBootAttemptAndMaybeRollback(input), 'no-pending-update')
+    assert.equal(await readFile(exePath, 'utf8'), 'new build', 'the healthy build stays')
+    await assert.rejects(readFile(`${exePath}.old`), 'the update is finalized: no backup left')
+    await assert.rejects(readFile(input.updateStateFile), 'and no pending state')
+    await assert.rejects(readFile(input.heldBackFile), 'and the build is not held back')
+  })
+})
+
+test('a build that never confirmed is still rolled back once the lock is free', async (context) => {
+  context.mock.method(console, 'warn', () => undefined)
+  context.mock.method(console, 'error', () => undefined)
+  let lockHeld = true
+  await withSwitchableLock(() => lockHeld, async (directory) => {
+    const exePath = path.join(directory, 'owned.exe')
+    const input = { exePath, updateStateFile: path.join(directory, 'self-update.json'), heldBackFile: path.join(directory, 'held-back.json') }
+    await writeFile(exePath, 'new build')
+    await writeFile(`${exePath}.old`, 'old build')
+    await writeSelfUpdateState(input.updateStateFile, { fromFingerprint: 'old', toFingerprint: 'new', updatedAt: new Date().toISOString(), bootAttempts: 0, backupPath: `${exePath}.old` })
+    for (let restart = 0; restart < 3; restart += 1) await noteBootAttemptAndMaybeRollback(input)
+    lockHeld = false
+    assert.equal(await noteBootAttemptAndMaybeRollback(input), 'rolled-back')
+    assert.equal(await readFile(exePath, 'utf8'), 'old build')
+  })
 })

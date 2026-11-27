@@ -138,3 +138,17 @@ test('without sign-in, one person\'s import never replaces another\'s', async ()
     assert.equal(await store.confirm(first.id, anonymous, 'choice', async () => 'saved'), 'saved')
   } finally { await store.close() }
 })
+
+test('parallel imports from one person never exceed their allowance', async () => {
+  const store = new PreparedImports<string>(path.join(tmpdir(), 'absent-prepared-fixture'), () => {})
+  try {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const slow = async () => { await gate; return await fixtureDownload() }
+    const attempts = Array.from({ length: 5 }, () => store.prepare('a:alice', 'a', slow))
+    const settled = Promise.allSettled(attempts)
+    release()
+    const results = await settled
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, PREPARED_IMPORT_LIMITS.perOwner)
+  } finally { await store.close() }
+})
