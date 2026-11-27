@@ -3,6 +3,9 @@
  * A durable claim is intentionally retained after a crash or uncertain handoff;
  * neither elapsed time nor a reused PID is permission to remove installed files.
  * Nested helpers share only the active operation's asynchronous execution scope.
+ * An administrator clears a claim left by a crash with `update clear-lock`
+ * (`clearStaleWindowsInstallOperation`), which removes it only when the process
+ * that took it is provably gone.
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawnSync } from 'node:child_process'
@@ -25,21 +28,38 @@ export interface WindowsInstallOperation {
 }
 const operations = new AsyncLocalStorage<WindowsInstallOperation>()
 
+type AdmissionAction = 'acquire' | 'release' | 'clear'
+
+/** How long one native admission call may take unless the caller allows longer. */
+const DEFAULT_ADMISSION_TIMEOUT_MS = 15_000
+
+/**
+ * The installation lock could not be taken or released: another operation holds it, a crash left
+ * it behind, or PowerShell could not run (AppLocker, Constrained Language Mode, a slow cold boot).
+ * Callers that must not fail outright (the boot-attempt counter) recognize it by this type.
+ */
+export class WindowsInstallOperationRefusedError extends Error {
+  constructor(readonly action: AdmissionAction) {
+    super(`Windows installation operation ${action} refused. Another operation or interrupted cleanup may still own this installation; if none is running, an administrator can run 'update clear-lock'.`)
+    this.name = 'WindowsInstallOperationRefusedError'
+  }
+}
+
 /** Invoke the fixed native admission protocol; refusal never guesses at recovery. */
-function invoke(action: 'acquire' | 'release', operation: Pick<WindowsInstallOperation, 'installDir' | 'serviceId' | 'dataDir' | 'token'>): { directory: string; installDir: string; claim: string; cutoff?: string } {
+function invoke(action: AdmissionAction, operation: Pick<WindowsInstallOperation, 'installDir' | 'serviceId' | 'dataDir' | 'token'>, timeoutMs = DEFAULT_ADMISSION_TIMEOUT_MS): { directory: string; installDir: string; claim: string; cutoff?: string } & Record<string, unknown> {
   const result = spawnSync(windowsPowerShellPath(), [
     '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand',
     Buffer.from(WINDOWS_INSTALL_OPERATION_SCRIPT, 'utf16le').toString('base64')
-  ], { input: JSON.stringify({ installDir: operation.installDir, serviceId: operation.serviceId, dataDir: operation.dataDir, token: operation.token, action, pid: process.pid }), encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 })
+  ], { input: JSON.stringify({ installDir: operation.installDir, serviceId: operation.serviceId, dataDir: operation.dataDir, token: operation.token, action, pid: process.pid }), encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 })
   if (result.error || result.status !== 0 || result.signal !== null) {
-    throw new Error(`Windows installation operation ${action} refused. Another operation or interrupted cleanup may still own this installation; retain its operation record for administrator recovery.`)
+    throw new WindowsInstallOperationRefusedError(action)
   }
   const output = JSON.parse(result.stdout) as { directory?: unknown; installDir?: unknown; claim?: unknown }
   if (typeof output.directory !== 'string' || typeof output.installDir !== 'string' || typeof output.claim !== 'string'
       || path.win32.join(output.directory, 'active.json') !== output.claim) {
     throw new Error('Windows installation operation returned invalid paths; claim retained for recovery')
   }
-  return output as { directory: string; installDir: string; claim: string; cutoff?: string }
+  return output as { directory: string; installDir: string; claim: string; cutoff?: string } & Record<string, unknown>
 }
 
 /** Current lease may be transferred exactly once; a transferred caller cannot release it. */
@@ -55,7 +75,12 @@ export function transferWindowsInstallOperation(): WindowsInstallOperation {
  * ownership until settlement. Non-Windows callers retain their existing behavior.
  * The executable basename is the installed service id shared by both SEA apps.
  */
-export function withWindowsInstallOperation<T>(exePath: string, callback: () => T, dataDir?: string): T {
+export interface WindowsInstallOperationOptions {
+  /** How long taking the lock may take; the boot path allows longer for a slow cold start. */
+  acquireTimeoutMs?: number
+}
+
+export function withWindowsInstallOperation<T>(exePath: string, callback: () => T, dataDir?: string, options: WindowsInstallOperationOptions = {}): T {
   if (process.platform !== 'win32') return callback()
   const installDir = path.win32.dirname(exePath)
   const serviceId = path.win32.basename(exePath).replace(/\.exe$/i, '')
@@ -77,7 +102,7 @@ export function withWindowsInstallOperation<T>(exePath: string, callback: () => 
     return result
   }
   const request = { installDir, serviceId, dataDir, token: randomUUID() }
-  const observed = invoke('acquire', request)
+  const observed = invoke('acquire', request, options.acquireTimeoutMs)
   const operation: WindowsInstallOperation = { ...request, ...observed, active: true, transferred: false, pending: new Set() }
   const releaseClaim = (): void => {
     operation.active = false
@@ -105,4 +130,73 @@ export function withWindowsInstallOperation<T>(exePath: string, callback: () => 
     releaseAfterSynchronousCallback()
     return result
   })
+}
+
+/** What `clearStaleWindowsInstallOperation` found and did. */
+export type ClearInstallOperationResult =
+  | { outcome: 'not-windows' }
+  | { outcome: 'refused'; searchIn: string }
+  | { outcome: 'none'; claim: string }
+  | { outcome: 'still-running'; claim: string; pid: number }
+  | { outcome: 'cleared'; claim: string; pid: number | null; claimedAt: string | null }
+
+/**
+ * Removes the installation lock a crashed operation left behind, for `update clear-lock`.
+ *
+ * Never automatic, and never on elapsed time alone: the claim is removed only when the process
+ * that took it is gone. A process with the recorded id still counts as the owner unless it
+ * started after the claim was taken, because Windows reuses process ids. Needs an administrator
+ * (or the service's own identity), like every change to the installation.
+ */
+export function clearStaleWindowsInstallOperation(exePath: string): ClearInstallOperationResult {
+  if (process.platform !== 'win32') return { outcome: 'not-windows' }
+  const installDir = path.win32.dirname(exePath)
+  const serviceId = path.win32.basename(exePath).replace(/\.exe$/i, '')
+  let result: ReturnType<typeof invoke>
+  try {
+    result = invoke('clear', { installDir, serviceId, token: randomUUID() })
+  } catch (error) {
+    // The same PowerShell that could not take the lock may not run this either: say so, with the
+    // manual route, rather than repeating "run clear-lock".
+    if (!(error instanceof WindowsInstallOperationRefusedError)) throw error
+    return { outcome: 'refused', searchIn: process.env.SystemDrive ?? 'C:' }
+  }
+  const pid = typeof result.ownerPid === 'number' ? result.ownerPid : null
+  if (result.outcome === 'none') return { outcome: 'none', claim: result.claim }
+  if (result.outcome === 'still-running' && pid !== null) return { outcome: 'still-running', claim: result.claim, pid }
+  if (result.outcome === 'cleared') {
+    return { outcome: 'cleared', claim: result.claim, pid, claimedAt: typeof result.claimedAt === 'string' ? result.claimedAt : null }
+  }
+  throw new Error('Windows installation operation clear returned an unknown result; nothing was assumed removed')
+}
+
+/**
+ * The line `update clear-lock` prints for a result, and its exit code: 0 when the installation is
+ * now unlocked (cleared, or nothing to clear), 1 while the owner still runs.
+ */
+export function describeClearInstallOperationResult(result: ClearInstallOperationResult): { message: string; exitCode: number } {
+  if (result.outcome === 'refused') {
+    return {
+      message: 'Could not check the installation lock: PowerShell could not run the check (AppLocker or Constrained Language Mode can block it),'
+        + ' or this prompt is not elevated. From an administrator prompt, make sure no PrintStream update, installer or uninstaller is running,'
+        + ` then delete the active.json file in ${result.searchIn}\\.sea-install-operation-<id> (one folder per installed PrintStream app; only a held lock has the file), and restart the service.`,
+      exitCode: 4
+    }
+  }
+  switch (result.outcome) {
+    case 'not-windows':
+      return { message: 'Only Windows installs use an installation lock; nothing to clear.', exitCode: 0 }
+    case 'none':
+      return { message: `No installation lock is held (${result.claim} does not exist).`, exitCode: 0 }
+    case 'still-running':
+      return {
+        message: `The installation lock at ${result.claim} belongs to process ${result.pid}, which is still running. Let it finish, or stop it, then run this again.`,
+        exitCode: 1
+      }
+    case 'cleared':
+      return {
+        message: `Removed the installation lock ${result.claim}, taken by process ${result.pid ?? 'unknown'}${result.claimedAt ? ` at ${result.claimedAt}` : ''}, which is no longer running. Restart the service.`,
+        exitCode: 0
+      }
+  }
 }

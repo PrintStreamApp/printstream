@@ -115,7 +115,8 @@ export {
 } from './service/winsw.js'
 export type { WinswControllerOptions } from './service/winsw.js'
 
-export { withWindowsInstallOperation } from './windows-install-operation.js'
+export { clearStaleWindowsInstallOperation, describeClearInstallOperationResult, withWindowsInstallOperation, WindowsInstallOperationRefusedError } from './windows-install-operation.js'
+export type { ClearInstallOperationResult } from './windows-install-operation.js'
 export { observeServiceInstallation } from './service/installation.js'
 export type { ServiceInstallation, ServiceQuery, ServiceQueryResult } from './service/installation.js'
 export { assertSingleInstanceRetired } from './single-instance.js'

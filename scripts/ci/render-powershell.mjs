@@ -47,6 +47,7 @@ const {
   buildUserSessionTrayScript,
   buildHideOwnConsoleScript
 } = await importFromRepo('packages/sea-runtime/dist/windows-elevation.js')
+const { WINDOWS_INSTALL_OPERATION_SCRIPT } = await importFromRepo('packages/sea-runtime/dist/windows-install-operation-script.js')
 
 /**
  * Inputs are only placeholders for the SHAPE of the script: the generators
@@ -92,6 +93,8 @@ const scripts = {
     transferred: true,
     pending: new Set()
   }),
+  // The installation lock (acquire, release and the administrator's clear-lock), fixed text.
+  'install-operation.ps1': WINDOWS_INSTALL_OPERATION_SCRIPT,
   'user-session-tray.ps1': buildUserSessionTrayScript(AWKWARD, 'tray run', "PrintStream's TrayLaunch"),
   'hide-own-console.ps1': buildHideOwnConsoleScript(),
   'start-menu-shortcut.ps1': buildShortcutScript(

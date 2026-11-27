@@ -24,7 +24,14 @@
  * history permanently disagreeing with the directory (and blocks the Prisma CLI
  * outright when one of them is a FAILED row). It rewrites such a history to the
  * single init row, running no SQL: the schema those migrations produced is by
- * construction what init produces.
+ * construction what init produces. It touches only names dated before the
+ * squash (`isPreSquashMigrationName`). An unknown name dated after it is a row
+ * from a NEWER build, left behind by a rollback, and must survive: deleting it
+ * (as 1.3.22 did) strands that migration's tables without a history row, and the
+ * next upgrade fails re-creating them.
+ *
+ * Plus a repair for exactly that damage, `ROLLBACK_RECOVERY_PROBES`: a pending
+ * migration whose objects a probe finds already present is recorded, not run.
  *
  * Each step records a Prisma-compatible row (same table shape, same sha256
  * checksum) so the embedded database stays compatible with the Docker stack's
@@ -57,6 +64,35 @@ export function defaultMigrationsDir(): string {
   // the env module here is safe: this module is first loaded after the database
   // URL is settled (see `server.ts`).
   return env.PRINTSTREAM_MIGRATIONS_DIR ?? path.resolve(moduleDir, '..', '..', 'prisma', 'migrations')
+}
+
+/**
+ * The first migration after the squash onto `00000000000000_init`. Every
+ * retired pre-squash migration is dated before it; every later migration, on
+ * any branch, after it. Mirrored in `scripts/lib/bootstrap-prisma-migrations.mjs`.
+ */
+export const FIRST_POST_SQUASH_MIGRATION = '20260801130000_rename_to_workspace_and_customer'
+
+/** Whether a history row names a migration the squash retired (and so may be collapsed). */
+export function isPreSquashMigrationName(name: string): boolean {
+  return name !== '00000000000000_init' && name < FIRST_POST_SQUASH_MIGRATION
+}
+
+/**
+ * Migrations a rollback to an older build may have left applied but unrecorded:
+ * 1.3.22's history cleanup deleted the row of any migration it did not know,
+ * keeping its tables. Each probe answers "are this migration's objects already
+ * here?" by testing the LAST object the migration creates; each migration runs in
+ * one transaction, so that object existing means all of them do. A probe that
+ * says yes records the migration instead of running it.
+ *
+ * Only for migrations shipped before this repair existed. New migrations are
+ * written to be re-runnable instead (the API development notes).
+ */
+export const ROLLBACK_RECOVERY_PROBES: Readonly<Record<string, string>> = {
+  '20261025000000_printer_fault_history': `SELECT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'PrinterFaultJobSpan_order_check'
+  ) AS present`
 }
 
 /** A single checked-in migration: its directory name, SQL body, and checksum. */
@@ -163,6 +199,14 @@ async function hasAppSchema(client: Client): Promise<boolean> {
   return result.rows[0]?.present === true
 }
 
+/** Whether a pending migration's objects are already present (see `ROLLBACK_RECOVERY_PROBES`). */
+async function isLeftByRollback(client: Client, migration: MigrationFile): Promise<boolean> {
+  const probe = ROLLBACK_RECOVERY_PROBES[migration.name]
+  if (!probe) return false
+  const result = await client.query<{ present: boolean }>(probe)
+  return result.rows[0]?.present === true
+}
+
 /** Records a migration as applied. Caller owns the surrounding transaction. */
 async function recordMigration(client: Client, migration: MigrationFile): Promise<void> {
   await client.query(
@@ -237,7 +281,10 @@ export async function reconcileMigrationHistory(
   if (existing.rows.length === 0) return 0
 
   const onDisk = new Set(all.map((migration) => migration.name))
-  const stale = existing.rows.map((row) => row.migration_name).filter((name) => !onDisk.has(name))
+  // A name dated after the squash is a newer build's row, never stale (see the module comment).
+  const stale = existing.rows
+    .map((row) => row.migration_name)
+    .filter((name) => !onDisk.has(name) && isPreSquashMigrationName(name))
   if (stale.length === 0) return 0
 
   // Only a database that already carries the schema can be collapsed; anything
@@ -303,6 +350,12 @@ export async function applyPendingMigrations(options: ApplyMigrationsOptions): P
     log(`Applying ${pending.length} migration(s)...`)
     const applied: string[] = []
     for (const migration of pending) {
+      if (await isLeftByRollback(client, migration)) {
+        await recordMigration(client, migration)
+        applied.push(migration.name)
+        log(`Recorded ${migration.name}: its objects were already present, left by a rollback to an older build.`)
+        continue
+      }
       await applyOne(client, migration)
       applied.push(migration.name)
       log(`Applied ${migration.name}`)

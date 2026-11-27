@@ -7,8 +7,10 @@ import path from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { Client } from 'pg'
 import {
+  ROLLBACK_RECOVERY_PROBES,
   applyPendingMigrations,
   defaultMigrationsDir,
+  isPreSquashMigrationName,
   listMigrationFiles,
   migrationChecksum,
   selectPendingMigrations
@@ -308,6 +310,74 @@ test('applyPendingMigrations collapses a pre-squash history without re-running r
     const again = await applyPendingMigrations({ databaseUrl: targetUrl })
     assert.equal(again.collapsedLegacyRows, 0, 'collapsing is once-only')
     assert.deepEqual(again.applied, [])
+  } finally {
+    await admin
+      .query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [dbName])
+      .catch(() => undefined)
+    await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => undefined)
+    await admin.end().catch(() => undefined)
+  }
+})
+
+test('only names dated before the squash are pre-squash history', () => {
+  assert.equal(isPreSquashMigrationName('20260505150000_platform_groups'), true)
+  assert.equal(isPreSquashMigrationName('20260801070000_allow_workspace_invites'), true)
+  assert.equal(isPreSquashMigrationName('00000000000000_init'), false)
+  assert.equal(isPreSquashMigrationName('20260801130000_rename_to_workspace_and_customer'), false)
+  // A newer build's migration, left behind by a rollback.
+  assert.equal(isPreSquashMigrationName('20261025000000_printer_fault_history'), false)
+})
+
+test('every rollback probe names a checked-in migration', () => {
+  const onDisk = new Set(listMigrationFiles(defaultMigrationsDir()).map((migration) => migration.name))
+  for (const name of Object.keys(ROLLBACK_RECOVERY_PROBES)) assert.ok(onDisk.has(name), name)
+})
+
+test('after a rollback to 1.3.22, the next upgrade keeps newer rows and records the stranded migration', async (t) => {
+  const adminUrl = await migrationTestAdminUrl(t)
+  if (!adminUrl) return
+
+  const dbName = `printstream_rollbacktest_${randomUUID().replace(/-/g, '')}`
+  const admin = new Client({ connectionString: adminUrl })
+  await admin.connect()
+  await admin.query(`CREATE DATABASE "${dbName}"`)
+  const targetUrl = withDatabaseName(adminUrl, dbName)
+
+  try {
+    await applyPendingMigrations({ databaseUrl: targetUrl })
+    // What 1.3.22 leaves after rolling back from 1.3.23: the fault-history row
+    // deleted, its tables kept. Plus a row from some later build this one does
+    // not know, which must survive.
+    const seed = new Client({ connectionString: targetUrl })
+    await seed.connect()
+    try {
+      await seed.query(`DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261025000000_printer_fault_history'`)
+      await seed.query(
+        `INSERT INTO "_prisma_migrations"
+           ("id", "checksum", "finished_at", "migration_name", "logs", "rolled_back_at", "started_at", "applied_steps_count")
+         VALUES ($1, 'ff', now(), '20991231000000_from_a_newer_build', NULL, NULL, now(), 1)`,
+        [randomUUID()]
+      )
+    } finally {
+      await seed.end().catch(() => undefined)
+    }
+
+    const logs: string[] = []
+    const result = await applyPendingMigrations({ databaseUrl: targetUrl, log: (message) => logs.push(message) })
+    assert.equal(result.collapsedLegacyRows, 0, 'a newer build\'s row is not pre-squash history')
+    assert.deepEqual(result.applied, ['20261025000000_printer_fault_history'])
+    assert.ok(logs.some((line) => line.startsWith('Recorded 20261025000000_printer_fault_history')), logs.join('\n'))
+
+    const probe = new Client({ connectionString: targetUrl })
+    await probe.connect()
+    try {
+      const rows = await probe.query<{ migration_name: string }>(`SELECT "migration_name" FROM "_prisma_migrations"`)
+      const names = rows.rows.map((row) => row.migration_name)
+      assert.ok(names.includes('20991231000000_from_a_newer_build'))
+      assert.ok(names.includes('20261025000000_printer_fault_history'))
+    } finally {
+      await probe.end().catch(() => undefined)
+    }
   } finally {
     await admin
       .query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [dbName])

@@ -9,7 +9,8 @@
  * say "automatic and pinned" at once. Self-hosters have the old names in `.env` files and compose
  * files, and the standalone installer wrote them into each machine's config file, so they are read
  * for good (CONF-10's self-hosted exception) and produce a notice naming the replacement. The
- * standalone bridge also rewrites its own config file (`migrateLegacyUpdateSettings`).
+ * standalone bridge also rewrites its own config file (`migrateLegacyUpdateSettings`), keeping the
+ * old names beside the new one, in agreement, so a rollback to an older build keeps the mode.
  *
  * Pure: callers pass the raw values in and log the notices themselves.
  */
@@ -55,6 +56,28 @@ export function legacyUpdateMode(
 }
 
 /**
+ * The old pair of settings that means `mode`, written next to `BRIDGE_UPDATE_MODE` in a standalone
+ * install's config file. A bridge rolled back to a build from before the new setting (1.3.22 and
+ * earlier) reads only these, and with neither present it would default to automatic, un-pinning a
+ * pinned or manual bridge. Keeping them costs nothing: they agree with the new setting, so they
+ * produce no notice.
+ */
+export function legacySettingsForMode(mode: BridgeUpdateMode): Record<typeof LEGACY_AUTO_UPDATE_KEY | typeof LEGACY_DISABLE_SELF_UPDATE_KEY, string> {
+  return {
+    [LEGACY_AUTO_UPDATE_KEY]: mode === 'automatic' ? 'true' : 'false',
+    [LEGACY_DISABLE_SELF_UPDATE_KEY]: mode === 'pinned' ? 'true' : 'false'
+  }
+}
+
+/** A config file's or environment's spelling of a boolean, as the env module reads it; else unset. */
+export function parseLegacyFlag(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1') return true
+  if (normalized === 'false' || normalized === '0') return false
+  return undefined
+}
+
+/**
  * Works out the update mode: the new setting, else what the old names meant, else `defaultMode`.
  *
  * @param defaultMode what this kind of bridge does when nothing is set (automatic for the slim
@@ -70,9 +93,13 @@ export function resolveBridgeUpdateMode(
     settings.legacyDisableSelfUpdate === undefined ? null : LEGACY_DISABLE_SELF_UPDATE_KEY
   ].filter((name): name is string => name !== null)
 
-  // The new setting is authoritative; the old ones are only reported, so they can be removed.
+  // The new setting is authoritative. Old names that agree with it are the rollback copy a
+  // standalone install keeps (`legacySettingsForMode`); only a contradiction is reported.
   if (settings.mode) {
-    if (legacyNames.length > 0) {
+    // Old names that say nothing on their own (`BRIDGE_DISABLE_SELF_UPDATE=false`) contradict nothing.
+    const legacyMode = legacyUpdateMode(settings.legacyAutoUpdate, settings.legacyDisableSelfUpdate)
+    const agrees = legacyMode === undefined || legacyMode === settings.mode
+    if (legacyNames.length > 0 && !agrees) {
       notices.push(`${legacyNames.join(' and ')} ignored because ${UPDATE_MODE_KEY} is set; remove them.`)
     }
     return { mode: settings.mode, notices }

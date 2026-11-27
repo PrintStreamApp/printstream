@@ -159,6 +159,33 @@ if ($record.action -eq 'acquire') {
 } elseif ($record.action -eq 'release') {
   AssertInstallClaim $control $record.token
   [IO.File]::Delete($control.claim)
+} elseif ($record.action -eq 'clear') {
+  # Administrator recovery only. The owner is gone when no process has the recorded id, or the
+  # process that has it started after the claim was taken (Windows reuses ids). Anything else,
+  # including a start time that cannot be read, keeps the claim.
+  AssertPlainInstallPath $control.claim
+  if (-not [IO.File]::Exists($control.claim)) {
+    @{ directory=$control.directory; installDir=$control.installDir; claim=$control.claim; outcome='none' } | ConvertTo-Json -Compress
+    exit 0
+  }
+  $claimRecord = [IO.File]::ReadAllText($control.claim) | ConvertFrom-Json
+  $ownerPid = [int]$claimRecord.pid
+  $claimedAt = $null
+  if ($claimRecord.cutoff) { $claimedAt = [DateTime]::FromFileTimeUtc([long]$claimRecord.cutoff) }
+  $owner = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+  if ($owner) {
+    $started = $null
+    try { $started = $owner.StartTime.ToUniversalTime() } catch { $started = $null }
+    if ($null -eq $started -or $null -eq $claimedAt -or $started -le $claimedAt) {
+      @{ directory=$control.directory; installDir=$control.installDir; claim=$control.claim; outcome='still-running'; ownerPid=$ownerPid } | ConvertTo-Json -Compress
+      exit 0
+    }
+  }
+  [IO.File]::Delete($control.claim)
+  $claimedText = $null
+  if ($claimedAt) { $claimedText = $claimedAt.ToString('o') }
+  @{ directory=$control.directory; installDir=$control.installDir; claim=$control.claim; outcome='cleared'; ownerPid=$ownerPid; claimedAt=$claimedText } | ConvertTo-Json -Compress
+  exit 0
 } else { throw 'Unknown installation operation action' }
 @{ directory=$control.directory; installDir=$control.installDir; claim=$control.claim; cutoff=$record.cutoff } | ConvertTo-Json -Compress
 `

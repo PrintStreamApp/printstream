@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { resolveBridgeUpdateMode, type BridgeUpdateSettings } from './update-mode.js'
+import { legacySettingsForMode, legacyUpdateMode, parseLegacyFlag, resolveBridgeUpdateMode, type BridgeUpdateSettings } from './update-mode.js'
 
 /** Nothing set; each test sets only what it is about. */
 function settings(overrides: Partial<BridgeUpdateSettings> = {}): BridgeUpdateSettings {
@@ -62,4 +62,28 @@ test('BRIDGE_UPDATE_MODE wins over the old names, which are reported as ignored'
   assert.deepEqual(result.notices, [
     'BRIDGE_AUTO_UPDATE and BRIDGE_DISABLE_SELF_UPDATE ignored because BRIDGE_UPDATE_MODE is set; remove them.'
   ])
+})
+
+test('old names that agree with BRIDGE_UPDATE_MODE are the rollback copy and log nothing', () => {
+  for (const mode of ['automatic', 'manual', 'pinned'] as const) {
+    const legacy = legacySettingsForMode(mode)
+    const result = resolveBridgeUpdateMode(settings({
+      mode,
+      legacyAutoUpdate: parseLegacyFlag(legacy.BRIDGE_AUTO_UPDATE),
+      legacyDisableSelfUpdate: parseLegacyFlag(legacy.BRIDGE_DISABLE_SELF_UPDATE)
+    }), 'manual')
+    assert.equal(result.mode, mode)
+    assert.deepEqual(result.notices, [], mode)
+  }
+})
+
+test('the rollback copy means the same mode to a build that reads only the old names', () => {
+  for (const mode of ['automatic', 'manual', 'pinned'] as const) {
+    const legacy = legacySettingsForMode(mode)
+    assert.equal(legacyUpdateMode(parseLegacyFlag(legacy.BRIDGE_AUTO_UPDATE), parseLegacyFlag(legacy.BRIDGE_DISABLE_SELF_UPDATE)), mode)
+  }
+})
+
+test('an old pin-off beside BRIDGE_UPDATE_MODE contradicts nothing', () => {
+  assert.deepEqual(resolveBridgeUpdateMode(settings({ mode: 'automatic', legacyDisableSelfUpdate: false }), 'manual').notices, [])
 })

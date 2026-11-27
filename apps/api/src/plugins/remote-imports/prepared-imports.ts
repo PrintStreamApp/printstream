@@ -20,6 +20,8 @@ export interface PreparedDownload {
 
 interface Entry<T> {
   owner: string
+  workspaceId: string
+  createdAt: number
   expiresAt: number
   download: PreparedDownload
   confirmation?: string
@@ -29,10 +31,25 @@ interface Entry<T> {
 
 const LIFETIME_MS = 10 * 60_000
 
+/**
+ * Downloads awaiting a destination, counted with those still downloading. Per person, a new import
+ * replaces their oldest waiting one, which is almost always a picker they closed or abandoned. Per
+ * workspace, and overall (the bytes sit on this node's disk), a full queue refuses until one
+ * finishes or expires. Before 1.3.24 one cap of 8 was shared by every workspace, so a single
+ * person's abandoned pickers could block imports for everyone.
+ */
+export const PREPARED_IMPORT_LIMITS = { perOwner: 2, perWorkspace: 4, total: 16 } as const
+
+/** A download in flight, before it has an entry. */
+interface Reservation {
+  owner: string
+  workspaceId: string
+}
+
 export class PreparedImports<T> {
   private readonly entries = new Map<string, Entry<T>>()
   private readonly mutex = createKeyedMutex()
-  private preparing = 0
+  private readonly preparing = new Set<Reservation>()
   private readonly downloads = new Set<AbortController>()
   private closed = false
   private readonly timer: ReturnType<typeof setInterval>
@@ -42,17 +59,32 @@ export class PreparedImports<T> {
     this.timer.unref()
   }
 
-  /** Reserve capacity before network work; a lost response is reclaimed by expiry. */
-  async prepare(owner: string, download: (signal: AbortSignal) => Promise<PreparedDownload>) {
+  /**
+   * Reserve capacity before network work; a lost response is reclaimed by expiry.
+   *
+   * @param owner the person (workspace, actor type and id) the download is bound to.
+   * @param workspaceId the workspace it counts against (see `PREPARED_IMPORT_LIMITS`).
+   * @param options.identifiable false when `owner` does not tell people apart (a sign-in-free
+   *   install, where everyone is the same anonymous actor). Then nobody's waiting import is
+   *   replaced, since it may be someone else's, and only the workspace and overall limits apply.
+   */
+  async prepare(owner: string, workspaceId: string, download: (signal: AbortSignal) => Promise<PreparedDownload>, options: { identifiable?: boolean } = {}) {
     if (this.closed) throw conflict('Model importing is shutting down. Try again shortly.')
     await this.sweep()
-    const pending = [...this.entries.values()].filter((entry) => !entry.completed).length
-    if (pending + this.preparing >= 8) throw conflict('Too many model imports are awaiting a destination. Try again shortly.')
+    if (options.identifiable ?? true) await this.makeRoomFor(owner)
+    const waiting = [...this.entries.values()].filter((entry) => !entry.completed)
+    const inFlight = [...this.preparing]
+    const inWorkspace = waiting.filter((entry) => entry.workspaceId === workspaceId).length
+      + inFlight.filter((reservation) => reservation.workspaceId === workspaceId).length
+    if (inWorkspace >= PREPARED_IMPORT_LIMITS.perWorkspace || waiting.length + inFlight.length >= PREPARED_IMPORT_LIMITS.total) {
+      throw conflict('Too many model imports are awaiting a destination. Try again shortly.')
+    }
     // Completed replies retain no bytes. Keep a separate bounded replay cache,
     // so normal successful use never consumes pending-download capacity.
     const receipts = [...this.entries].filter(([, entry]) => entry.completed)
     for (const [id] of receipts.slice(0, Math.max(0, receipts.length - 127))) this.entries.delete(id)
-    this.preparing += 1
+    const reservation: Reservation = { owner, workspaceId }
+    this.preparing.add(reservation)
     const cancellation = new AbortController()
     this.downloads.add(cancellation)
     const timeout = setTimeout(() => cancellation.abort(new Error('Model download timed out. Import it again.')), LIFETIME_MS)
@@ -65,12 +97,12 @@ export class PreparedImports<T> {
       }
       const id = randomUUID()
       const expiresAt = Date.now() + LIFETIME_MS
-      this.entries.set(id, { owner, expiresAt, download: file, completed: false })
+      this.entries.set(id, { owner, workspaceId, createdAt: Date.now(), expiresAt, download: file, completed: false })
       return { id, fileName: file.fileName, sizeBytes: file.sizeBytes, expiresAt: new Date(expiresAt).toISOString() }
     } finally {
       clearTimeout(timeout)
       this.downloads.delete(cancellation)
-      this.preparing -= 1
+      this.preparing.delete(reservation)
     }
   }
 
@@ -95,6 +127,31 @@ export class PreparedImports<T> {
         await this.removeBytes(entry.download.cleanupPath)
       }
     })
+  }
+
+  /**
+   * Keeps one person under `perOwner` by discarding their oldest downloads still waiting for a
+   * destination. One whose saving has begun is never touched; if those alone fill the allowance,
+   * the person's new import is refused.
+   */
+  private async makeRoomFor(owner: string): Promise<void> {
+    const mine = () => [...this.entries]
+      .filter(([, entry]) => entry.owner === owner && !entry.completed)
+      .sort(([, left], [, right]) => left.createdAt - right.createdAt)
+    const inFlight = [...this.preparing].filter((reservation) => reservation.owner === owner).length
+    for (const [id, entry] of mine()) {
+      if (mine().length + inFlight < PREPARED_IMPORT_LIMITS.perOwner) return
+      if (entry.confirmation) continue
+      await this.mutex.run(id, async () => {
+        const current = this.entries.get(id)
+        if (!current || current.confirmation) return
+        this.entries.delete(id)
+        await this.removeBytes(current.download.cleanupPath)
+      })
+    }
+    if (mine().length + inFlight >= PREPARED_IMPORT_LIMITS.perOwner) {
+      throw conflict('Your earlier model imports are still downloading or saving. Try again shortly.')
+    }
   }
 
   /** Cancellation only discards temporary bytes, never a saved library copy. */
@@ -130,7 +187,7 @@ export class PreparedImports<T> {
       })
     }
     // A preparation has not published its path yet. Never sweep a live download.
-    if (this.preparing > 0) return
+    if (this.preparing.size > 0) return
     let directories: string[]
     try { directories = await readdir(this.directory) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return

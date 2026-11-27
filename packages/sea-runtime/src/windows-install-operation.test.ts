@@ -4,7 +4,7 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { mock, test } from 'node:test'
 import { setImmediate as yieldToLoop } from 'node:timers/promises'
-import { transferWindowsInstallOperation, withWindowsInstallOperation } from './windows-install-operation.js'
+import { clearStaleWindowsInstallOperation, describeClearInstallOperationResult, transferWindowsInstallOperation, withWindowsInstallOperation } from './windows-install-operation.js'
 
 const executable = 'C:\\Program Files\\Example\\example.exe'
 type Call = { action: string; token: string; installDir: string; serviceId: string }
@@ -188,4 +188,60 @@ test('a rejected detached child outlives a synchronous parent without releasing 
     await yieldToLoop()
     assert.deepEqual(calls.map((call) => call.action), ['acquire', 'release'])
   })
+})
+
+/** Runs `body` as Windows with a native `clear` that answers `reply`. */
+async function withClearReply(reply: Record<string, unknown>, body: () => void): Promise<void> {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const directory = 'C:\\.sea-install-operation-example'
+  const native = mock.method(childProcess, 'spawnSync', (_command: string, _args: string[], options: { input: string }) => {
+    assert.equal(JSON.parse(options.input).action, 'clear')
+    return { status: 0, signal: null, stdout: JSON.stringify({ directory, claim: `${directory}\\active.json`, installDir: 'C:\\Program Files\\Example', ...reply }) }
+  })
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+  syncBuiltinESMExports()
+  try { body() } finally {
+    Object.defineProperty(process, 'platform', platform)
+    native.mock.restore()
+    syncBuiltinESMExports()
+  }
+}
+
+test('clear-lock reports what it removed, and never claims a removal it did not make', async () => {
+  await withClearReply({ outcome: 'cleared', ownerPid: 4242, claimedAt: '2026-11-26T18:00:00.0000000Z' }, () => {
+    assert.deepEqual(clearStaleWindowsInstallOperation(executable), { outcome: 'cleared', claim: 'C:\\.sea-install-operation-example\\active.json', pid: 4242, claimedAt: '2026-11-26T18:00:00.0000000Z' })
+  })
+  await withClearReply({ outcome: 'still-running', ownerPid: 4242 }, () => {
+    assert.equal(clearStaleWindowsInstallOperation(executable).outcome, 'still-running')
+  })
+  await withClearReply({ outcome: 'none' }, () => {
+    assert.equal(clearStaleWindowsInstallOperation(executable).outcome, 'none')
+  })
+  await withClearReply({ outcome: 'surprise' }, () => {
+    assert.throws(() => clearStaleWindowsInstallOperation(executable), /nothing was assumed removed/)
+  })
+})
+
+test('clear-lock does nothing outside Windows', () => {
+  if (process.platform === 'win32') return
+  assert.deepEqual(clearStaleWindowsInstallOperation(executable), { outcome: 'not-windows' })
+})
+
+test('clear-lock gives the manual route when PowerShell cannot run the check', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const native = mock.method(childProcess, 'spawnSync', () => ({ status: 1, signal: null, stdout: '', stderr: 'blocked' }))
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+  syncBuiltinESMExports()
+  try {
+    const result = clearStaleWindowsInstallOperation(executable)
+    assert.equal(result.outcome, 'refused')
+    const { message, exitCode } = describeClearInstallOperationResult(result)
+    assert.equal(exitCode, 4)
+    assert.match(message, /\.sea-install-operation-<id>/)
+    assert.doesNotMatch(message, /run 'update clear-lock'/)
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+    native.mock.restore()
+    syncBuiltinESMExports()
+  }
 })

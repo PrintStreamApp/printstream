@@ -216,7 +216,7 @@ export function createRemoteImportsPlugin(input: {
         const closed = () => { if (!response.writableEnded) cancellation.abort() }
         response.once('close', closed)
         try {
-          const result = await prepared.prepare(preparedOwner(request), async (deadline) => {
+          const result = await prepared.prepare(preparedOwner(request), requireRequestWorkspaceId(request), async (deadline) => {
             const signal = AbortSignal.any([deadline, cancellation.signal])
             const url = parsed.data.url
             const makerWorldRef = parseMakerWorldModelUrl(url)
@@ -238,7 +238,7 @@ export function createRemoteImportsPlugin(input: {
               throw badRequest(IMPORTABLE_EXTENSIONS_MESSAGE)
             }
             return { ...download, sourceUrl: url }
-          })
+          }, { identifiable: request.auth.actor.type !== 'anonymous' })
           if (response.destroyed) await prepared.cancel(result.id, preparedOwner(request))
           else response.json(remoteImportPreparedResponseSchema.parse(result))
         } finally {

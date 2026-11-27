@@ -11,15 +11,19 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PrismaClient } from '@prisma/client'
+import pg from 'pg'
 import {
   getPrismaOutput,
   hasFailedMigrationState,
   isNonEmptyDatabaseBaselineCase,
+  isPreSquashMigrationName,
   isRecoverableFreshInstallBaselineGap,
+  isAlreadyExistsError,
+  isRollbackDamagedHistory,
   listCheckedInMigrationNames
 } from './lib/bootstrap-prisma-migrations.mjs'
 
@@ -117,7 +121,10 @@ async function collapsePreSquashMigrationHistory() {
     ).catch(() => null)
     if (!rows || rows.length === 0) return
 
-    const stale = rows.map((row) => row.migration_name).filter((name) => !onDisk.has(name))
+    // Only retired pre-squash names: a newer build's row, left by a rollback, is kept.
+    const stale = rows
+      .map((row) => row.migration_name)
+      .filter((name) => !onDisk.has(name) && isPreSquashMigrationName(name))
     if (stale.length === 0) return
 
     // Only collapse a database that already carries the schema those rows built.
@@ -128,8 +135,8 @@ async function collapsePreSquashMigrationHistory() {
 
     const recorded = rows.some((row) => row.migration_name === init)
     await prisma.$executeRawUnsafe(
-      `DELETE FROM "_prisma_migrations" WHERE "migration_name" <> $1`,
-      init
+      'DELETE FROM "_prisma_migrations" WHERE "migration_name" = ANY($1::text[])',
+      stale
     )
     if (!recorded) {
       const checksum = createHash('sha256')
@@ -148,10 +155,130 @@ async function collapsePreSquashMigrationHistory() {
   })
 }
 
+/** The history as rows: names applied, and the failed rows with their recorded errors. */
+async function readMigrationHistory() {
+  return await withPrisma(async (prisma) => {
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT "migration_name", "logs", "finished_at", "rolled_back_at" FROM "_prisma_migrations"'
+    ).catch(() => [])
+    return {
+      applied: rows.filter((row) => row.finished_at && !row.rolled_back_at).map((row) => row.migration_name),
+      failed: rows.filter((row) => !row.finished_at && !row.rolled_back_at)
+    }
+  })
+}
+
+/** Prisma-only `DATABASE_URL` parameters libpq rejects (mirrors `server-backup-tools.ts`). */
+const PRISMA_ONLY_URL_PARAMS = ['schema', 'connection_limit', 'pool_timeout', 'pgbouncer', 'socket_timeout', 'statement_cache_size', 'sslaccept', 'sslidentity', 'sslpassword']
+
+/** `DATABASE_URL` without the Prisma-only parameters, for pg_dump and node-postgres. */
+function libpqDatabaseUrl() {
+  const url = new URL(process.env.DATABASE_URL ?? '')
+  for (const param of PRISMA_ONLY_URL_PARAMS) url.searchParams.delete(param)
+  return url.toString()
+}
+
+/**
+ * The first error a migration's SQL raises against this database, found by replaying it inside a
+ * transaction that is always rolled back, so nothing it does is kept. PostgreSQL stops a
+ * multi-statement script at its first failure and returns that error, which is the real cause
+ * even when Prisma recorded only "current transaction is aborted". Returns null when the replay
+ * raised nothing.
+ */
+async function firstMigrationError(migrationName) {
+  const sql = readFileSync(path.join(migrationsDir, migrationName, 'migration.sql'), 'utf8')
+  const client = new pg.Client({ connectionString: libpqDatabaseUrl() })
+  await client.connect()
+  try {
+    await client.query('BEGIN')
+    try {
+      await client.query(sql)
+      return null
+    } catch (error) {
+      return { code: error.code, message: error.message }
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined)
+    }
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+/**
+ * Dumps the database to the backups folder before the history repair changes anything. Returns
+ * the dump's path, or null when no dump could be made (no folder, no pg_dump, or it failed), in
+ * which case the repair does not run.
+ */
+function backUpBeforeHistoryRepair() {
+  const directory = process.env.BACKUPS_DIR ?? '/backups'
+  if (!existsSync(directory)) {
+    process.stdout.write(`[history-repair] No backups folder at ${directory}; not repairing without a backup.\n`)
+    return null
+  }
+  const file = path.join(directory, `pre-history-repair-${new Date().toISOString().replace(/[:.]/g, '-')}.dump`)
+  const result = spawnSync(process.env.PG_DUMP_PATH || 'pg_dump', ['--format=custom', `--file=${file}`, libpqDatabaseUrl()], { encoding: 'utf8' })
+  if (result.error || result.status !== 0) {
+    process.stdout.write(`[history-repair] Could not back up the database first (${result.error?.message ?? result.stderr?.trim() ?? 'pg_dump failed'}); not repairing.\n`)
+    return null
+  }
+  return file
+}
+
+/**
+ * Repairs a history a rollback to 1.3.23 or earlier damaged (`isRollbackDamagedHistory`), one
+ * migration at a time, never recording a migration whose SQL did not run here or before.
+ *
+ * Backs the database up first, then repeats: the failed migration failed only because what it
+ * creates already exists, so it ran before the rollback and is recorded as applied; `migrate
+ * deploy` then carries on. Migrations the database never had run normally, with all their SQL
+ * (indexes, checks, backfills), so a database that was behind this build ends up exactly where
+ * an ordinary upgrade would take it. Stops, leaving the rest for an administrator, as soon as a
+ * failure is anything else. Each step is logged.
+ *
+ * @returns the last `migrate deploy` result, or null when the history is not the damaged shape
+ *   or no backup could be made (nothing was changed).
+ */
+async function repairRollbackDamagedHistory() {
+  const onDisk = listCheckedInMigrationNames(migrationsDir)
+  let history = await readMigrationHistory()
+  // The damaged shape, and a failure that is "already exists" when the migration is replayed.
+  const isDamaged = async () => isRollbackDamagedHistory({ ...history, onDisk })
+    && isAlreadyExistsError(await firstMigrationError(history.failed[0].migration_name))
+  if (!await isDamaged()) return null
+
+  process.stdout.write('[history-repair] The migration history is behind the schema: migrations are failing because what they create already exists, the trace of a rollback to an older build that deleted history rows.\n')
+  const backup = backUpBeforeHistoryRepair()
+  if (!backup) return null
+  process.stdout.write(`[history-repair] Backed up the database to ${backup}.\n`)
+
+  let result = null
+  for (let step = 0; step < onDisk.length && (step === 0 || await isDamaged()); step += 1) {
+    const failed = history.failed[0].migration_name
+    runPrisma(['migrate', 'resolve', '--applied', failed, '--schema', schemaPath])
+    process.stdout.write(`[history-repair] Recorded ${failed} as applied: its objects were already present from before the rollback.\n`)
+    result = runPrisma(['migrate', 'deploy', '--schema', schemaPath], { tolerateFailure: true })
+    if ((result.status ?? 1) === 0) {
+      process.stdout.write('[history-repair] The remaining migrations applied normally. Repair complete.\n')
+      return result
+    }
+    history = await readMigrationHistory()
+  }
+  process.stdout.write('[history-repair] Stopped: the next failure is not one this repair recognizes.\n')
+  return result
+}
+
 await collapsePreSquashMigrationHistory()
 
 process.stdout.write('Applying database migrations...\n')
-const migrateResult = runPrisma(['migrate', 'deploy', '--schema', schemaPath], { tolerateFailure: true })
+let migrateResult = runPrisma(['migrate', 'deploy', '--schema', schemaPath], { tolerateFailure: true })
+
+if ((migrateResult.status ?? 1) !== 0 && !isNonEmptyDatabaseBaselineCase(migrateResult)) {
+  const repaired = await repairRollbackDamagedHistory()
+  if (repaired) {
+    writePrismaOutput(migrateResult)
+    migrateResult = repaired
+  }
+}
 
 if (isNonEmptyDatabaseBaselineCase(migrateResult)) {
   await synchronizeSchemaWithBaseline(

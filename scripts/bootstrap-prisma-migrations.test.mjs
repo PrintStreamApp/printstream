@@ -6,7 +6,10 @@ import { test } from 'node:test'
 import {
   getPrismaOutput,
   hasFailedMigrationState,
+  isAlreadyExistsError,
+  isRollbackDamagedHistory,
   isNonEmptyDatabaseBaselineCase,
+  isPreSquashMigrationName,
   isRecoverableFreshInstallBaselineGap,
   listCheckedInMigrationNames
 } from './lib/bootstrap-prisma-migrations.mjs'
@@ -78,4 +81,65 @@ test('listCheckedInMigrationNames returns sorted migration directories only', as
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+})
+test('only names dated before the squash are collapsed; a newer build\'s row is kept', () => {
+  assert.equal(isPreSquashMigrationName('20260505150000_platform_groups'), true)
+  assert.equal(isPreSquashMigrationName('20260801070000_allow_workspace_invites'), true)
+  assert.equal(isPreSquashMigrationName('00000000000000_init'), false)
+  assert.equal(isPreSquashMigrationName('20260801130000_rename_to_workspace_and_customer'), false)
+  assert.equal(isPreSquashMigrationName('20261025000000_printer_fault_history'), false)
+})
+
+test('a first error is an already-exists failure only by its PostgreSQL code', () => {
+  assert.equal(isAlreadyExistsError({ code: '42P07', message: 'relation "PrinterFault" already exists' }), true)
+  assert.equal(isAlreadyExistsError({ code: '42710', message: 'type "TagEntityKind" already exists' }), true)
+  assert.equal(isAlreadyExistsError({ code: '42701', message: 'column "kind" of relation "Workspace" already exists' }), true)
+  assert.equal(isAlreadyExistsError({ code: '25P02', message: 'current transaction is aborted' }), false)
+  assert.equal(isAlreadyExistsError({ code: '42P01', message: 'relation "AuthGroup" does not exist' }), false)
+  assert.equal(isAlreadyExistsError(null), false)
+})
+
+const onDisk = [
+  '00000000000000_init',
+  '20260801130000_rename_to_workspace_and_customer',
+  '20260910160000_prepared_slicing_source',
+  '20261025000000_printer_fault_history',
+  '20261201000000_some_later_migration'
+]
+
+test('the damaged shape is exactly the history a rollback to 1.3.23 or earlier leaves', () => {
+  // 1.3.22 kept only init, re-ran the next migration (idempotent), and failed on the one after.
+  assert.equal(isRollbackDamagedHistory({
+    applied: ['00000000000000_init', '20260801130000_rename_to_workspace_and_customer'],
+    failed: [{ migration_name: '20260910160000_prepared_slicing_source' }],
+    onDisk
+  }), true)
+})
+
+test('the damaged shape never matches a normal history or a newly added migration failing', () => {
+  assert.equal(isRollbackDamagedHistory({ applied: onDisk, failed: [], onDisk }), false)
+  assert.equal(isRollbackDamagedHistory({
+    applied: onDisk.slice(0, 4),
+    failed: [{ migration_name: '20261201000000_some_later_migration' }],
+    onDisk
+  }), false)
+  // A gap in the applied rows, two failures, or an unknown row.
+  assert.equal(isRollbackDamagedHistory({
+    applied: ['00000000000000_init', '20260910160000_prepared_slicing_source'],
+    failed: [{ migration_name: '20261025000000_printer_fault_history' }],
+    onDisk
+  }), false)
+  assert.equal(isRollbackDamagedHistory({
+    applied: ['00000000000000_init'],
+    failed: [
+      { migration_name: '20260801130000_rename_to_workspace_and_customer' },
+      { migration_name: '20260910160000_prepared_slicing_source' }
+    ],
+    onDisk
+  }), false)
+  assert.equal(isRollbackDamagedHistory({
+    applied: ['00000000000000_init', '20991231000000_unknown'],
+    failed: [{ migration_name: '20260910160000_prepared_slicing_source' }],
+    onDisk
+  }), false)
 })

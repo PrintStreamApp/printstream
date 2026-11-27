@@ -20,7 +20,7 @@
  * Counterparts: `apps/bridge/src/private/sea/self-update.ts` (the bridge driver)
  * and `apps/api/src/lib/native-update-apply.ts` (the server driver).
  */
-import { withWindowsInstallOperation } from './windows-install-operation.js'
+import { WindowsInstallOperationRefusedError, withWindowsInstallOperation } from './windows-install-operation.js'
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -166,12 +166,25 @@ async function clearOrDisplace(backupPath: string): Promise<string> {
   }
 }
 
-export type BootAttemptOutcome = 'no-pending-update' | 'counted' | 'rolled-back'
+export type BootAttemptOutcome = 'no-pending-update' | 'counted' | 'rolled-back' | 'rollback-blocked'
+
+/**
+ * How long the boot may wait for the Windows installation lock. Longer than the default because a
+ * cold boot can take well over 15 seconds to start PowerShell and compile its helper.
+ */
+const BOOT_LOCK_TIMEOUT_MS = 60_000
 
 /**
  * Startup hook: while a self-update is pending health confirmation, count this
  * boot. After too many unconfirmed attempts, restore the backed-up binary and
  * hold the failed build back so an automatic updater does not loop on it.
+ *
+ * On Windows the work runs under the installation lock. When the lock cannot be
+ * taken (a crash left it, or PowerShell cannot run), the boot is still counted,
+ * from the update state alone, so the boot neither fails before counting nor
+ * loops uncounted. The rollback itself swaps installed files and is never done
+ * without the lock: past the limit this returns `rollback-blocked` and logs what
+ * an administrator should do.
  */
 export async function noteBootAttemptAndMaybeRollback(input: {
   updateStateFile: string
@@ -180,6 +193,42 @@ export async function noteBootAttemptAndMaybeRollback(input: {
   maxAttempts?: number
 }): Promise<BootAttemptOutcome> {
   if (!await readSelfUpdateState(input.updateStateFile)) return 'no-pending-update'
+  try {
+    return await countBootAndMaybeRollBackUnderLock(input)
+  } catch (error) {
+    // Only a lock that could not be TAKEN: a failed release comes after this boot was counted.
+    if (!(error instanceof WindowsInstallOperationRefusedError) || error.action !== 'acquire') throw error
+    return await countBootWithoutLock(input)
+  }
+}
+
+/** The boot count without the installation lock: update state only, never installed files. */
+async function countBootWithoutLock(input: { updateStateFile: string; exePath: string; maxAttempts?: number }): Promise<BootAttemptOutcome> {
+  const state = await readSelfUpdateState(input.updateStateFile)
+  if (!state) return 'no-pending-update'
+  const attempts = state.bootAttempts + 1
+  const maxAttempts = input.maxAttempts ?? MAX_BOOT_ATTEMPTS
+  await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
+  if (attempts > maxAttempts) {
+    console.error(
+      `Build ${state.toFingerprint.slice(0, 12)} has not been confirmed healthy after ${attempts - 1} starts since its self-update, but rolling back`
+      + ' needs the Windows installation lock, which another operation or an earlier crash still holds.'
+      + ` If no PrintStream update or installer is running, run '"${input.exePath}" update clear-lock'`
+      + ' from an administrator prompt, then restart the service.'
+    )
+    return 'rollback-blocked'
+  }
+  console.warn(`Counted boot ${attempts} of ${maxAttempts} for the pending self-update without the Windows installation lock, which could not be taken.`)
+  return 'counted'
+}
+
+/** The boot count and, past the limit, the rollback, under the installation lock. */
+async function countBootAndMaybeRollBackUnderLock(input: {
+  updateStateFile: string
+  heldBackFile: string
+  exePath: string
+  maxAttempts?: number
+}): Promise<BootAttemptOutcome> {
   return withWindowsInstallOperation(input.exePath, async () => {
     const state = await readSelfUpdateState(input.updateStateFile)
     if (!state) return 'no-pending-update'
@@ -205,7 +254,7 @@ export async function noteBootAttemptAndMaybeRollback(input: {
 
     await writeSelfUpdateState(input.updateStateFile, { ...state, bootAttempts: attempts })
     return 'counted'
-  }, path.dirname(input.updateStateFile))
+  }, path.dirname(input.updateStateFile), { acquireTimeoutMs: BOOT_LOCK_TIMEOUT_MS })
 }
 
 /**
@@ -241,12 +290,33 @@ export async function rollbackSelfUpdate(input: {
   }, path.dirname(input.updateStateFile))
 }
 
-/** Finalizes a pending self-update: drops the rollback backup and bookkeeping. */
+/**
+ * Finalizes a pending self-update: drops the rollback backup and bookkeeping.
+ *
+ * Returns false, leaving the update pending, when the Windows installation lock
+ * cannot be taken: a healthy build must keep running, so this logs what an
+ * administrator should do instead of failing its caller (the bridge confirms
+ * inside registration). The next start tries again.
+ */
 export async function confirmSelfUpdateHealthy(input: {
   updateStateFile: string
   exePath: string
 }): Promise<boolean> {
   if (!await readSelfUpdateState(input.updateStateFile)) return false
+  try {
+    return await finalizeSelfUpdateUnderLock(input)
+  } catch (error) {
+    if (!(error instanceof WindowsInstallOperationRefusedError) || error.action !== 'acquire') throw error
+    console.warn(
+      'This build is running, but its update cannot be finalized: the Windows installation lock is held by another operation or an earlier crash.'
+      + ` If no PrintStream update or installer is running, run '"${input.exePath}" update clear-lock' from an administrator prompt.`
+    )
+    return false
+  }
+}
+
+/** The confirmation itself, under the installation lock. */
+async function finalizeSelfUpdateUnderLock(input: { updateStateFile: string; exePath: string }): Promise<boolean> {
   return withWindowsInstallOperation(input.exePath, async () => {
     const state = await readSelfUpdateState(input.updateStateFile)
     if (!state) return false

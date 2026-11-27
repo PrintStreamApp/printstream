@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.3.24",
+      "releasedOn": "2026-11-26",
+      "changes": [
+        "Self-hosted: rolling back to an older version no longer stops a later upgrade from starting. Docker installs that a rollback to 1.3.22 left unable to start repair themselves on upgrade, after saving a database backup to the backups folder.",
+        "Self-hosted bridges set to pinned or manual updates keep that setting if rolled back to an older version, and a standalone bridge whose old update settings don't pick a mode now updates automatically, as intended.",
+        "Importing models from a link: unfinished imports no longer block imports for other people, and starting a new import replaces your own oldest unfinished one.",
+        "Windows server app and bridge: an update that can't take its installation lock is still counted toward the automatic rollback, and a new \"update clear-lock\" command removes a lock left by a crash."
+      ]
+    },
+    {
       "version": "1.3.23",
       "releasedOn": "2026-11-26",
       "changes": [
